@@ -1,6 +1,6 @@
 /*
- * 01/2011,
- * wipe ram and shut down system
+ * 01/2011 wipe ram and shut down amd64 system against cold boot attack
+ *
  * usage: # echo 1 > /proc/panicmode
  * needs: sysrq for sync & remount
  *
@@ -19,8 +19,8 @@
 #include <linux/reboot.h>       /* for machine_shutdown */
 #include <linux/sched.h>        /* for task_struct, for_each_process... */
 #include <linux/sysrq.h>        /* sysrq functionality */
-#include <linux/mm.h>			/* __pa __va high_memory */
-#include <asm/e820.h>			/* warning x86 specific! */
+#include <linux/mm.h>           /* __pa __va high_memory */
+#include <asm/e820.h>           /* warning x86 specific! */
 #include <asm/uaccess.h>        /* for copy_from_user */
 
 MODULE_LICENSE("GPL");
@@ -47,6 +47,41 @@ static unsigned long procfs_buffer_size = 0;
 
 
 /*
+ * Contains assembler to be stored at a safe place.
+ * Switches to long mode and overwrites all RAM.
+ */
+static void wiper(unsigned long memsize)
+{
+        printk(KERN_ALERT "PANICMODE: jump complete.");
+        printk(KERN_ALERT "Everybody head back to base for debriefing and cocktails.\n");
+        //TODO:
+        /* create GDT */
+        /*
+        // Selector 0x00 cannot be used
+        GDT[0] = {.base=0, .limit=0, .type=0};
+        // Selector 0x08 will be our code
+        GDT[1] = {.base=0, .limit=memsize, .type=0x9A};
+        // Selector 0x10 will be our data
+        GDT[2] = {.base=0, .limit=memsize, .type=0x92};
+        // You can use LTR(0x18)
+        GDT[3] = {.base=&myTss, .limit=sizeof(myTss), .type=0x89};
+        */
+
+        /* switch off paging */
+        /*
+        mov eax, cr0 ; Read CR0.
+        and eax,7FFFFFFFh; Set PE=0
+        mov cr0, eax ; Write CR0.
+        ...
+        */
+
+        /* switch to long mode */
+        /* overwrite ram */
+        //use memsize
+        /* power off system */
+}
+
+/*
  * Signal sysrq helper function.  Sends a signal to all user processes.
  * Copied from drivers/char/sysrq.c
  */
@@ -64,16 +99,14 @@ static void send_sig_all(int sig)
 /*
  * Enter panic mode: terminate all tasks and wipe ram
  */
-void panicmode_execute(void)
+static void panicmode_execute(void)
 {
-		/* $%"§-ing stupid ISO C90 mode ... */
-		loff_t physical_start = 0;
-		loff_t physical_end = 0;
-		loff_t ignore_begin = 0;
-		loff_t ignore_end = 0;
-		int i = 0;
+        unsigned long safemem;
+        struct sysinfo info;
+        unsigned long memsize;
 
         printk(KERN_ALERT "PANICMODE: entering panic mode. PANIC!!1\n");
+        //TODO check cpuid if we actually are amd64 else we're fucked
 
         /* shut down clean and fast */
         printk(KERN_ALERT "DEBUG sigterm\n");
@@ -99,73 +132,24 @@ void panicmode_execute(void)
         local_irq_disable();
 
         /* shut down other CPUs */
-        //reboot.c machine_ops.shutdown / machine_shutdown
         printk(KERN_ALERT "PANICMODE: shutting down cores\n");
         smp_send_stop();
         //machine_shutdown();
-		
-		// get two chunks of pysical continuous memory
-		// then copy the tables of memory to bewiped to the
-		// fist chunk, this chunk of course has to be in the tables
-		// then copy the bytecode to the second chunk and 
-		// signal the pysical position to it in a register
-		// then jump into the wipe-bytecode
-		
-		/* some functions to remember:
-		 *  - page_is_ram
-		 *  - xlate_dev_mem_ptr 
-		 *  - macros: __pa(x) and __va(x)
-		 */
-
-		// do we also have to add the pagetables of the kernel
-		// virtual address space to the ignore list?
-		
-		physical_start = 0;
-		physical_end = __pa(high_memory);
-		
-		// avoid all device mapped areas
-		// stolen from page_is_ram
-		
-		// first page (4k) is bios, not ram
-		physical_start += PAGE_SIZE;
-
-		// add another bios segment
-		// BIOS_BEGIN <= x < BIOS_END
-			
-
-		for(i = 0; i < e820.nr_map; i++) {
-		  if (e820.map[i].type != E820_RAM) {
-			// no ram add to ignore list
-			ignore_begin = e820.map[i].addr;
-			ignore_end = e820.map[i].addr + e820.map[i].size;
-		  }
-		}
-		
-
-        //TODO protected address space
-
-        //TODO overwrite ram; virt_to_bus()
 
         //TODO
-        //handle_sysrq('o'); // shut off system (how??)
-		//
-		printk(KERN_ALERT "PANICMODE: all done\n");
-}
+        /* find address space to store asm */
+        //safemem = __pa(high_memory) + 5*1024*1024;
+        safemem = 0xffffffff816d41bd;
 
-void calculate_required_table_space(void) {
-	  int i;
-	  unsigned long long required = 0;
+        /* copy asm */
+        memcpy(&safemem, &wiper, 1024);
 
-	  required += 2 * sizeof(loff_t);
-
-	  for(i = 0; i < e820.nr_map; i++) {
-		if (e820.map[i].type != E820_RAM) {
-		  // no ram add to ignore list
-		  required += 2 * sizeof(loff_t);
-		}
-	  }
-
-	  printk(KERN_INFO "required space for ignore tables: %Li bytes\n", required);
+        /* jump into asm */
+        si_meminfo(&info);
+        memsize = info.totalram;
+        printk(KERN_ALERT "PANICMODE: %8lu kB total memory\n", memsize);
+        printk(KERN_ALERT "PANICMODE: jumping into assembly\n");
+        ((void (*)(unsigned long)) safemem)(memsize);
 }
 
 /*
@@ -188,9 +172,7 @@ int panicmode_procwrite(struct file *file, const char *buffer,
         /* unleash the panic: # echo 1 > /proc/panicmode */
         if (procfs_buffer[0] == '1') {
                 panicmode_execute();
-        } else if(procfs_buffer[0] == '2') {
-				calculate_required_table_space();
-		}
+        }
 
         return -EINVAL;
 }
