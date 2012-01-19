@@ -1,0 +1,17 @@
+Panicmode Kernel Module
+=======================
+
+This Linux kernel module aims at implementing a simple on-request memory wiper.
+It is supposed to copy it's own code to a known physical location in memory, disable
+all of the linux kernel stuff, that may interfere with the wipe and then wipe the 
+whole physical memory except itself. 
+
+This kernel module can be especially useful in combination with a hardware trigger
+device.
+
+
+how to build:
+$ KERNELDIR=/usr/src/linux-2.6 make -C /usr/src/linux-2.6/ M=`pwd` modules
+
+usage:
+# echo 1 > /proc/panicmode
