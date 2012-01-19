@@ -1,0 +1,26 @@
+how to build:
+$ KERNELDIR=/usr/src/linux-2.6 make -C /usr/src/linux-2.6/ M=`pwd` modules
+
+usage:
+# echo 1 > /proc/panicmode
+
+
+doc:
+- interface: sys/proc
+
+- für alle gewünschten sysreq keys:
+	#include linux/sysrq.h
+	void handle_sysrq(int key);
+
+
+- interrupts aus
+	* reicht das sicher?
+	* cpus aus?
+
+TODO:
+- eigenen speicherbereich rausfinden?
+	* wie?
+	* was muss alles geschützt werden?
+
+- alles bis auf eigenen bereich überschreiben
+	* wie?
